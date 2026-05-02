@@ -1,0 +1,174 @@
+//+------------------------------------------------------------------+
+//| AO UNIFIED EA WITH PANELS                                        |
+//+------------------------------------------------------------------+
+#property strict
+#property indicator_chart_window
+
+//================ INPUTS =================
+input bool   EnableBullish = true;
+input bool   EnableBearish = true;
+
+input double Lots         = 0.10;
+input int    Slippage     = 3;
+input int    Magic        = 909090;
+input int    StopLossPips = 100;
+
+//================ GLOBALS ================
+int BuyCount  = 0;
+int SellCount = 0;
+
+//================ PIP ====================
+double Pip()
+{
+   if(Digits == 3 || Digits == 5) return Point * 10;
+   return Point;
+}
+
+//================ NEW BAR ================
+bool NewBar()
+{
+   static datetime lastBar;
+   if(Time[0] != lastBar)
+   {
+      lastBar = Time[0];
+      return true;
+   }
+   return false;
+}
+
+//================ AO =====================
+bool AOGreenBelowZero()
+{
+   double a1=iAO(NULL,0,1), a2=iAO(NULL,0,2);
+   return (a1 < 0 && a1 > a2);
+}
+
+bool AORedAboveZero()
+{
+   double a1=iAO(NULL,0,1), a2=iAO(NULL,0,2);
+   return (a1 > 0 && a1 < a2);
+}
+
+//================ LEVELS =================
+double High24(){ return High[iHighest(NULL,0,MODE_HIGH,24,1)]; }
+double Low24() { return Low [iLowest (NULL,0,MODE_LOW ,24,1)]; }
+
+//================ ACTIVE TRADE ===========
+bool HasActiveTrade()
+{
+   for(int i=OrdersTotal()-1;i>=0;i--)
+      if(OrderSelect(i,SELECT_BY_POS) &&
+         OrderMagicNumber()==Magic &&
+        (OrderType()==OP_BUY || OrderType()==OP_SELL))
+         return true;
+   return false;
+}
+
+//================ PANELS =================
+void Panel(string name,string txt,int x,int y,color c)
+{
+   if(!ObjectFind(0,name))
+   {
+      ObjectCreate(0,name,OBJ_LABEL,0,0,0);
+      ObjectSet(name,OBJPROP_CORNER,0);
+      ObjectSet(name,OBJPROP_XDISTANCE,x);
+      ObjectSet(name,OBJPROP_YDISTANCE,y);
+   }
+   ObjectSetText(name,txt,9,"Arial",c);
+}
+
+//================ ON TICK ================
+void OnTick()
+{
+   //----------- PANEL DATA -----------
+   int active=0, pending=0;
+
+   for(int i=OrdersTotal()-1;i>=0;i--)
+   {
+      if(!OrderSelect(i,SELECT_BY_POS)) continue;
+      if(OrderMagicNumber()!=Magic) continue;
+
+      if(OrderType()==OP_BUY || OrderType()==OP_SELL) active++;
+      if(OrderType()==OP_BUYSTOP || OrderType()==OP_SELLSTOP) pending++;
+   }
+
+   //----------- PANELS ---------------
+   Panel("P1",
+      "BULLISH\n"+
+      "Enabled: "+(EnableBullish?"ON":"OFF")+"\n"+
+      "AO Green < 0: "+(AOGreenBelowZero()?"YES":"NO")+"\n"+
+      "Entry High24: "+DoubleToStr(High24(),Digits),
+      10,20,clrLime);
+
+   Panel("P2",
+      "BEARISH\n"+
+      "Enabled: "+(EnableBearish?"ON":"OFF")+"\n"+
+      "AO Red > 0: "+(AORedAboveZero()?"YES":"NO")+"\n"+
+      "Entry Low24: "+DoubleToStr(Low24(),Digits),
+      10,110,clrRed);
+
+   Panel("P3",
+      "ORDERS\n"+
+      "BUY executed: "+BuyCount+"\n"+
+      "SELL executed: "+SellCount+"\n"+
+      "Active: "+active+"\n"+
+      "Pending: "+pending,
+      10,200,clrWhite);
+
+   if(!NewBar()) return;
+
+   bool activeTrade = HasActiveTrade();
+
+   //----------- DELETE PENDINGS -------
+   if(activeTrade)
+      for(int j=OrdersTotal()-1;j>=0;j--)
+         if(OrderSelect(j,SELECT_BY_POS) &&
+            OrderMagicNumber()==Magic &&
+           (OrderType()==OP_BUYSTOP||OrderType()==OP_SELLSTOP))
+            OrderDelete(OrderTicket());
+
+   //----------- BULLISH ---------------
+   if(!activeTrade && EnableBullish && AOGreenBelowZero())
+   {
+      OrderSend(Symbol(),OP_BUYSTOP,Lots,
+         High24(),Slippage,
+         High24()-StopLossPips*Pip(),
+         0,"AO BUY",Magic,0,clrGreen);
+   }
+
+   //----------- BEARISH ---------------
+   if(!activeTrade && EnableBearish && AORedAboveZero())
+   {
+      OrderSend(Symbol(),OP_SELLSTOP,Lots,
+         Low24(),Slippage,
+         Low24()+StopLossPips*Pip(),
+         0,"AO SELL",Magic,0,clrRed);
+   }
+
+   //----------- TIMEOUT PENDINGS ------
+   for(int k=OrdersTotal()-1;k>=0;k--)
+      if(OrderSelect(k,SELECT_BY_POS) &&
+         OrderMagicNumber()==Magic &&
+        (OrderType()==OP_BUYSTOP||OrderType()==OP_SELLSTOP))
+         if(iBarShift(NULL,0,OrderOpenTime())>=6)
+            OrderDelete(OrderTicket());
+
+   //----------- CLOSE AT 4 BARS -------
+   for(int m=OrdersTotal()-1;m>=0;m--)
+   {
+      if(!OrderSelect(m,SELECT_BY_POS)) continue;
+      if(OrderMagicNumber()!=Magic) continue;
+
+      if(OrderType()==OP_BUY || OrderType()==OP_SELL)
+      {
+         if(iBarShift(NULL,0,OrderOpenTime())>=4)
+         {
+            if(OrderType()==OP_BUY)
+            { OrderClose(OrderTicket(),OrderLots(),Bid,Slippage); BuyCount++; }
+            if(OrderType()==OP_SELL)
+            { OrderClose(OrderTicket(),OrderLots(),Ask,Slippage); SellCount++; }
+         }
+      }
+   }
+}
+//+------------------------------------------------------------------+
